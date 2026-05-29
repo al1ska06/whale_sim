@@ -1,0 +1,104 @@
+// whale_sim_p2.slim
+// P2 — Deleterious mutation strength sweep
+//
+// Extends whale_sim.slim (P1) by adding a second mutation type whose
+// selection coefficient is passed in at runtime, letting Python sweep `s`
+// across a range to find the boundary at which genetic diversity can no
+// longer recover after the whaling bottleneck (Ne = 305, fixed from the
+// paper's empirical estimate).
+//
+// Parameters injected by exp_2.py via `slim -d`:
+//   BSIZE   — bottleneck Ne (50, 305, and 500)
+//   SEL_S   — selection coefficient for deleterious mutations (negative float,
+//             e.g. -0.001). Passed as a positive magnitude and negated below
+//             so the command-line string stays simple.
+//
+// Recoverability definition (no explicit threshold in Wayne et al. 2023):
+//   π_post / π_pre >= 0.80  →  "recoverable"
+//   (80 % of pre-bottleneck nucleotide diversity retained after recovery)
+//
+// OUTPUT lines parsed by exp_2.py:
+//   PRE_PI:  <float>   — π sampled just before the bottleneck
+//   POST_PI: <float>   — π sampled 20 generations after recovery begins
+//   RESULT_PI: <float> — same as POST_PI (keeps compatibility with P1 parser)
+
+initialize() {
+    // ── Mutation rate ────────────────────────────────────────────────────────
+    // Matches whale_sim.slim: slightly elevated to accumulate signal on 100 kb.
+    initializeMutationRate(1e-7);
+
+    // ── Mutation types ───────────────────────────────────────────────────────
+    // m1: neutral (synonymous proxy)
+    initializeMutationType("m1", 0.5, "f", 0.0);
+
+    // m2: deleterious nonsynonymous mutations.
+    //   Dominance h = 0.5  → use h=0.5 (additive) for all mutation types, which represents a conservative and biologically consistent simplification
+    //   Methods: "strongly deleterious mutations (s < -0.01) were fully recessive").
+    //   s is fixed per run (passed via SEL_S); negated here so SEL_S is a
+    //   positive magnitude on the command line.
+    initializeMutationType("m2", 0.5, "f", -SEL_S);
+
+    // ── Genomic layout ───────────────────────────────────────────────────────
+    // 70 % neutral / 30 % deleterious ratio approximates exonic proportion
+    // used in Wayne et al. 2023 SLiM simulations (Methods: 2.31:1 del:syn
+    // within exons; exons are ~13 % of the segment — we simplify to a single
+    // mixed element for computational efficiency).
+    initializeGenomicElementType("g1", c(m1, m2), c(0.7, 0.3));
+    initializeGenomicElement(g1, 0, 99999);
+
+    // Low recombination — keeps the locus behaving as one linkage block,
+    // matching whale_sim.slim.
+    initializeRecombinationRate(1e-7);
+}
+
+// ── Generation 1: establish historical (pre-whaling) population ──────────────
+// Ne = 5 000, matching whale_sim.slim.  The paper's pre-whaling ENP Ne was
+// ~17 000–24 000 (Fig. 3A); we use 5 000 here to keep runtime tractable,
+// consistent with the P1 baseline.
+1 early() {
+    sim.addSubpop("p1", 5000);
+}
+
+// ── Generation 999 late: sample PRE-bottleneck π ─────────────────────────────
+// Sampled one generation before the bottleneck so we capture the equilibrium
+// diversity the population had accumulated.
+999 late() {
+    n_sample = min(20, p1.individualCount);
+    sampled_inds = p1.sampleIndividuals(n_sample);
+    pi_pre = calcHeterozygosity(sampled_inds.haplosomes);
+    // Store as a global for use in the final output block.
+    defineGlobal("PI_PRE", pi_pre);
+    print("PRE_PI: " + pi_pre);
+}
+
+// ── Generation 1000: whaling bottleneck ─────────────────────────────────────
+// Reduces Ne to BSIZE (305 by default, matching Wayne et al. empirical value).
+1000 early() {
+    p1.setSubpopulationSize(BSIZE);
+}
+
+// ── Generation 1002: population begins recovery ──────────────────────────────
+// Wayne et al. Fig. 5A shows the bottleneck lasted ~2 generations before the
+// moratorium; we model recovery here as a return to pre-whaling Ne.
+// The population snaps back to 5 000, then we let it run 20 more generations
+// to allow genetic diversity to partially recover before sampling.
+1002 early() {
+    p1.setSubpopulationSize(5000);
+}
+
+// ── Generation 1022: sample POST-recovery π and report ───────────────────────
+// 20 generations post-recovery mirrors the "20 gens w/ recov" scenario in
+// Wayne et al. Fig. 5A.
+1022 late() {
+    if (p1.individualCount == 0) {
+        print("POST_PI: 0.0");
+        print("RESULT_PI: 0.0");
+    } else {
+        n_sample = min(20, p1.individualCount);
+        sampled_inds = p1.sampleIndividuals(n_sample);
+        pi_post = calcHeterozygosity(sampled_inds.haplosomes);
+        print("POST_PI: " + pi_post);
+        print("RESULT_PI: " + pi_post);
+    }
+    sim.simulationFinished();
+}

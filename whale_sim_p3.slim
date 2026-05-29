@@ -1,0 +1,112 @@
+// whale_sim_p3.slim
+// P3 — Duration of bottleneck sweep (time factor)
+//
+// Extends whale_sim.slim (P1) by making the number of generations spent at
+// the bottleneck population size a runtime parameter.  All other parameters
+// (mutation type, bottleneck Ne, pre/post Ne) are held constant so that
+// the *only* variable is how long the population stays at Ne = 305 before
+// recovering.
+//
+// This directly expands on Wayne et al. (2023) Fig. 5A, which showed
+// simulations at exactly 2 and 20 generations at the bottleneck Ne.  We
+// sweep integer values between (and beyond) those timepoints.
+//
+// Parameters injected by exp_3.py via `slim -d`:
+//   BSIZE      — bottleneck Ne (fixed at 305)
+//   BGENS      — number of generations to spend at the bottleneck before
+//                recovering (the variable being swept)
+//
+// Simulation timeline:
+//   Gen 1          — found population at Ne = 5 000 (pre-whaling size)
+//   Gen 9999 late  — sample π_pre (baseline); population at mutation-drift
+//                    equilibrium after 10x Ne burn-in
+//   Gen 10000      — drop to BSIZE (bottleneck starts)
+//   Gen 10000+BGENS — recover to Ne = 5 000 (moratorium / recovery)
+//   Gen 10000+BGENS+20 late — sample π_post (20 gens after recovery)
+//
+// Burn-in duration: 10 000 generations = 2× Ne (Ne = 5 000).
+// The standard recommendation is 10× Ne (Kelleher et al.); we use 2× Ne
+// as a practical compromise given compute constraints.  π_pre values
+// should be checked against the neutral expectation 4·Ne·μ = 4×5000×1e-7
+// = 0.0002 to confirm the population is near equilibrium before use.
+//
+// OUTPUT lines parsed by exp_3.py:
+//   PRE_PI:  <float>   — π sampled just before the bottleneck
+//   POST_PI: <float>   — π sampled 20 generations after recovery
+//   RESULT_PI: <float> — same as POST_PI (P1 parser compatibility)
+
+initialize() {
+    // Mutation rate: matches P1 and P2 (slightly elevated for 100 kb locus)
+    initializeMutationRate(1e-7);
+
+    // Neutral mutations only — P3 isolates the time variable, no deleterious
+    // load (that is P2's domain).
+    initializeMutationType("m1", 0.5, "f", 0.0);
+
+    initializeGenomicElementType("g1", m1, 1.0);
+    initializeGenomicElement(g1, 0, 99999);
+
+    // Low recombination, consistent with P1
+    initializeRecombinationRate(1e-7);
+}
+
+// ── Generation 1: establish pre-whaling population ───────────────────────────
+1 early() {
+    sim.addSubpop("p1", 5000);
+}
+
+// ── Generation 9999 late: sample pre-bottleneck π ────────────────────────────
+// Sampled after 10 000 generations of burn-in so the population is near
+// mutation-drift equilibrium (2× Ne generations).  This is the baseline
+// against which post-recovery diversity is compared.
+9999 late() {
+    // Guard against extinction (unlikely at Ne = 5000 but safe practice)
+    if (p1.individualCount == 0) {
+        defineGlobal("PI_PRE", 0.0);
+        print("PRE_PI: 0.0");
+        return;
+    }
+    n_sample = min(30, p1.individualCount);
+    sampled_inds = p1.sampleIndividuals(n_sample);
+    pi_pre = calcHeterozygosity(sampled_inds.haplosomes);
+    defineGlobal("PI_PRE", pi_pre);
+    print("PRE_PI: " + pi_pre);
+}
+
+// ── Generation 10000: whaling bottleneck begins ──────────────────────────────
+10000 early() {
+    p1.setSubpopulationSize(BSIZE);
+}
+
+// ── Generation 10000 + BGENS: recovery begins ────────────────────────────────
+// The population returns to pre-whaling size.  The callback range is set to
+// 10000:10100, which safely covers BGENS values up to 100 generations.
+// For the recommended sweep of BGENS in [2, 4, 6, ..., 50] the maximum
+// recovery generation is 10050, well within this range.
+10000:10100 early() {
+    if (sim.cycle == 10000 + BGENS) {
+        p1.setSubpopulationSize(5000);
+    }
+}
+
+// ── Generation 10000 + BGENS + 20: sample post-recovery π and report ─────────
+// We wait 20 generations after recovery (consistent with the P1 measurement
+// window and the "20 gens w/ recov" scenario in Wayne et al. Fig. 5A) so that
+// any rebound in genetic diversity has had time to manifest.
+// Callback range covers up to BGENS = 100 (max sampling gen = 10120).
+10000:10120 late() {
+    target_gen = 10000 + BGENS + 20;
+    if (sim.cycle == target_gen) {
+        if (p1.individualCount == 0) {
+            print("POST_PI: 0.0");
+            print("RESULT_PI: 0.0");
+        } else {
+            n_sample = min(30, p1.individualCount);
+            sampled_inds = p1.sampleIndividuals(n_sample);
+            pi_post = calcHeterozygosity(sampled_inds.haplosomes);
+            print("POST_PI: " + pi_post);
+            print("RESULT_PI: " + pi_post);
+        }
+        sim.simulationFinished();
+    }
+}

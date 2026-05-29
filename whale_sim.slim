@@ -1,0 +1,56 @@
+// whale_sim.slim
+// Models the whaling bottleneck as described in:
+//   Wayne et al. (2023) Nature Communications — "The genomic footprint of
+//   whaling and isolation in fin whale populations"
+//
+// BSIZE is passed from Python via:  slim -d BSIZE=<N> whale_sim.slim
+//
+// OUTPUT (parsed by exp_1.py):
+//   RESULT_PI: <float>     — nucleotide diversity in the post-bottleneck sample
+
+initialize() {
+    // Mutation rate realistic for cetaceans (~1e-8 per site per generation).
+    // Raised slightly here so signal accumulates on our short 100 kb locus.
+    initializeMutationRate(1e-7);
+
+    // m1 = neutral mutation (h=0.5, selection coeff = 0.0), can modify this to have a deleterious mutation for example
+    initializeMutationType("m1", 0.5, "f", 0.0);
+
+    // Single genomic element spanning 100 kb
+    initializeGenomicElementType("g1", m1, 1.0);
+    initializeGenomicElement(g1, 0, 99999);
+
+    // Low recombination — keeps the locus behaving like a single linkage block
+    initializeRecombinationRate(1e-7);
+}
+
+// ── Generation 1: establish the historical population ────────────────────────
+// Wayne et al. estimate the pre-whaling ENP effective population size at
+// ~50,000 individuals; we use 5,000 here to keep runtime tractable.
+1 early() {
+    sim.addSubpop("p1", 5000);
+}
+
+// ── Generation 1000: the whaling bottleneck ───────────────────────────────────
+// BSIZE is injected by Python. The paper documents a ~99 % reduction in Ne
+// during 20th-century whaling; our sweep explores a range of severity.
+1000 early() {
+    p1.setSubpopulationSize(BSIZE);
+}
+
+// ── Generation 1020: sample and measure ──────────────────────────────────────
+// 20 generations post-bottleneck mirrors a ~20-year recovery window at
+// ~1 generation/year for large whales.
+// We sample up to 20 individuals (the paper used ~50 whole genomes).
+1020 late() {
+    if (p1.individualCount == 0) {
+        print("RESULT_PI: 0.0");
+    } else {
+        n_sample = min(20, p1.individualCount);
+        sampled_inds = p1.sampleIndividuals(n_sample);
+        sampled_haplosomes = sampled_inds.haplosomes;
+        pi = calcHeterozygosity(sampled_haplosomes);
+        print("RESULT_PI: " + pi);
+    }
+    sim.simulationFinished();
+}
